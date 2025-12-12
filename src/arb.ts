@@ -7,30 +7,24 @@ import {
   findArbitrageOpportunities,
   findBestOpportunity,
 } from './arbCycleDetector';
-import { DEFAULT_FEE_TIER } from './fees';
-import { formatCurrency, formatPrice } from './formatting';
+import { ARBITRAGE_CONFIG } from './constants';
+import { formatCurrency } from './formatting';
 import { logger } from './logger';
 import type { MarketDataMap } from './marketData';
 import { Pair } from './types/valrEnums';
+import {
+  displayBreakdown,
+  displayCondensedBreakdown,
+} from './utils/breakdownDisplay';
+import { getTimestamp } from './utils/timestamp';
 import { ValrStream } from './valrStream';
-
-const FEE_TIER = DEFAULT_FEE_TIER; // Tier 5: Maker 0.04%, Taker 0.06% for crypto pairs
-const MIN_PROFIT_PERCENTAGE = 0.01; // Minimum 0.01% profit to report
-
-/**
- * Formats a timestamp for logging
- */
-function getTimestamp(): string {
-  const now = new Date();
-  return now.toISOString().replace('T', ' ').substring(0, 19);
-}
 
 export class ArbitrageEngine {
   private lastLoggedPath: string | null = null;
   private lastLoggedProfit: number | null = null;
   private consecutiveNoOpportunities: number = 0;
   private lastLogTime: number = 0;
-  private readonly LOG_INTERVAL_MS = 15000; // 15 seconds
+  private readonly LOG_INTERVAL_MS = ARBITRAGE_CONFIG.LOG_INTERVAL_MS;
   private lastLogLineCount: number = 0; // Track how many lines were printed last time
 
   constructor(private stream: ValrStream) {}
@@ -57,6 +51,112 @@ export class ArbitrageEngine {
     process.stdout.write('\x1b[J');
   }
 
+  /**
+   * Validates opportunities using realistic bid/ask prices
+   */
+  private validateOpportunities(
+    opportunities: ArbitrageOpportunity[],
+    marketData: MarketDataMap
+  ): Array<{
+    opportunity: ArbitrageOpportunity;
+    breakdown: ArbitrageBreakdown;
+  }> {
+    const validated: Array<{
+      opportunity: ArbitrageOpportunity;
+      breakdown: ArbitrageBreakdown;
+    }> = [];
+
+    for (const opp of opportunities) {
+      const breakdown = calculateArbitrageBreakdown(
+        opp.path,
+        marketData,
+        ARBITRAGE_CONFIG.FEE_TIER
+      );
+
+      if (
+        breakdown &&
+        breakdown.profit > 0 &&
+        breakdown.profitPercentage >= ARBITRAGE_CONFIG.MIN_PROFIT_PERCENTAGE
+      ) {
+        validated.push({ opportunity: opp, breakdown });
+      }
+    }
+
+    return validated;
+  }
+
+  /**
+   * Displays profitable opportunities
+   */
+  private displayProfitableOpportunities(
+    validatedOpportunities: Array<{
+      opportunity: ArbitrageOpportunity;
+      breakdown: ArbitrageBreakdown;
+    }>,
+    marketData: MarketDataMap
+  ): void {
+    this.lastLogLineCount = 0;
+    console.log(
+      `\n${logger.timestamp(getTimestamp())} ${logger.success(`✅ Found ${validatedOpportunities.length} arbitrage ${validatedOpportunities.length === 1 ? 'opportunity' : 'opportunities'}:`)}`
+    );
+
+    const best = validatedOpportunities[0];
+    if (!best) return;
+
+    displayBreakdown(best.breakdown, marketData);
+
+    if (validatedOpportunities.length > 1) {
+      console.log(`\n   ${logger.info('Other opportunities:')}`);
+      validatedOpportunities.slice(1).forEach((item, index) => {
+        const path = item.breakdown.path.join(' -> ');
+        const currency = item.breakdown.startingCurrency;
+        console.log(
+          `   ${index + 2}. ${logger.path(path)}: ${logger.profit(item.breakdown.profitPercentage, '%')} ${logger.dim(`(${logger.currency(currency)} required)`)}`
+        );
+      });
+    }
+  }
+
+  /**
+   * Displays warning for theoretical opportunity that can't be validated
+   */
+  private displayTheoreticalOpportunityWarning(
+    bestOpportunity: ArbitrageOpportunity,
+    currentProfit: number,
+    missingPairs: Pair[]
+  ): void {
+    this.lastLogLineCount = 0;
+    console.log(
+      `\n${logger.timestamp(getTimestamp())} ${logger.warning('⚠️  Theoretical opportunity found but cannot validate with realistic prices:')}`
+    );
+    console.log(
+      `   ${logger.info('Path:')} ${logger.path(bestOpportunity.path.join(' -> '))}`
+    );
+    console.log(
+      `   ${logger.info('Theoretical profit:')} ${logger.success(`${currentProfit.toFixed(4)}%`)} ${logger.dim('(using mid-prices, may differ from realistic bid/ask)')}`
+    );
+
+    if (missingPairs.length > 0) {
+      console.log(
+        `   ${logger.warning('⚠️  Missing market data for:')} ${logger.error(missingPairs.join(', '))}`
+      );
+      console.log(
+        `   ${logger.dim('These pairs may not be subscribed or have not received price updates yet.')}`
+      );
+    } else {
+      console.log(
+        `   ${logger.warning('⚠️  Invalid arbitrage path - currency flow does not match pair sequence')}`
+      );
+      console.log(
+        `   ${logger.dim('The cycle detector found this using theoretical prices, but the path is not executable.')}`
+      );
+      console.log(
+        `   ${logger.dim('This may indicate an issue with the cycle detection algorithm.')}`
+      );
+    }
+    console.log('');
+  }
+
   checkCycle() {
     const prices = this.stream.getLatestPrices();
     const marketData = this.stream.getMarketData();
@@ -70,130 +170,26 @@ export class ArbitrageEngine {
 
     const opportunities = findArbitrageOpportunities(
       prices,
-      FEE_TIER,
-      MIN_PROFIT_PERCENTAGE
+      ARBITRAGE_CONFIG.FEE_TIER,
+      ARBITRAGE_CONFIG.MIN_PROFIT_PERCENTAGE
     );
 
     // Validate opportunities using realistic bid/ask prices
-    const validatedOpportunities: Array<{
-      opportunity: ArbitrageOpportunity;
-      breakdown: ArbitrageBreakdown;
-    }> = [];
-
-    for (const opp of opportunities) {
-      const breakdown = calculateArbitrageBreakdown(
-        opp.path,
-        marketData,
-        FEE_TIER
-      );
-
-      // Only include opportunities that are actually profitable with bid/ask prices
-      if (
-        breakdown &&
-        breakdown.profit > 0 &&
-        breakdown.profitPercentage >= MIN_PROFIT_PERCENTAGE
-      ) {
-        validatedOpportunities.push({ opportunity: opp, breakdown });
-      }
-    }
+    const validatedOpportunities = this.validateOpportunities(
+      opportunities,
+      marketData
+    );
 
     if (validatedOpportunities.length > 0) {
-      // Reset line count when showing profitable opportunity (different message type)
-      this.lastLogLineCount = 0;
-      console.log(
-        `\n${logger.timestamp(getTimestamp())} ${logger.success(`✅ Found ${validatedOpportunities.length} arbitrage ${validatedOpportunities.length === 1 ? 'opportunity' : 'opportunities'}:`)}`
-      );
-
-      // Show detailed breakdown for the first (best) opportunity
-      const best = validatedOpportunities[0];
-      if (!best) return;
-
-      const { breakdown } = best;
-
-      console.log(
-        `\n${logger.header('📊 Detailed Breakdown (Best Opportunity):')}`
-      );
-      console.log(
-        `   ${logger.info('Path:')} ${logger.path(breakdown.path.join(' -> '))}`
-      );
-      console.log(
-        `   ${logger.info('Starting Currency:')} ${logger.currency(breakdown.startingCurrency)} ${logger.dim('(required to execute)')}`
-      );
-      const firstPair = breakdown.path[0];
-      if (firstPair) {
-        console.log(
-          `   ${logger.info('Trade Size:')} ${logger.amount(formatCurrency(breakdown.startingAmount, breakdown.startingCurrency, firstPair, marketData))} ${logger.currency(breakdown.startingCurrency)} ${logger.dim('(minimum needed, based on available liquidity)')}`
-        );
-      }
-      console.log(`\n   ${logger.info('Step-by-step:')}`);
-      breakdown.steps.forEach((step) => {
-        const priceLabel = step.priceIsEstimate ? '~' : '';
-        console.log(`   ${logger.step(step.step)}. ${step.action}`);
-        console.log(
-          `      ${logger.info('Price:')} ${priceLabel}${logger.price(formatPrice(step.price, step.pair, marketData))}${step.priceIsEstimate ? logger.warning(' (estimated)') : ''} | ${logger.info('Fee:')} ${(step.feeRate * 100).toFixed(4)}% (${logger.amount(formatCurrency(step.feeAmount, step.outputCurrency, step.pair, marketData))})`
-        );
-        if (
-          step.minTradeableAmount !== undefined &&
-          step.minTradeableAmount > 0
-        ) {
-          console.log(
-            `      ${logger.info('Min tradeable:')} ${logger.amount(formatCurrency(step.minTradeableAmount, step.inputCurrency, step.pair, marketData))} ${logger.currency(step.inputCurrency)} ${logger.dim('(VALR requirement)')}`
-          );
-        }
-        if (
-          step.maxTradeableAmount !== undefined &&
-          step.maxTradeableAmount > 0
-        ) {
-          console.log(
-            `      ${logger.info('Max tradeable at this step:')} ~${logger.amount(formatCurrency(step.maxTradeableAmount, step.inputCurrency, step.pair, marketData))} ${logger.currency(step.inputCurrency)} ${logger.dim('(0.1% of 24h volume)')}`
-          );
-        }
-        console.log(
-          `      ${logger.info('Result:')} ${logger.amount(formatCurrency(step.outputAmount, step.outputCurrency, step.pair, marketData))} ${logger.currency(step.outputCurrency)}`
-        );
-      });
-      const lastStep = breakdown.steps[breakdown.steps.length - 1];
-      if (lastStep) {
-        console.log(
-          `\n   ${logger.info('Final:')} ${logger.amount(formatCurrency(breakdown.finalAmount, lastStep.outputCurrency, lastStep.pair, marketData))} ${logger.currency(lastStep.outputCurrency)}`
-        );
-      }
-      if (firstPair) {
-        const profitValue = formatCurrency(
-          breakdown.profit,
-          breakdown.startingCurrency,
-          firstPair,
-          marketData
-        );
-        const profitColor =
-          breakdown.profit >= 0 ? logger.success : logger.error;
-        console.log(
-          `   ${logger.info('Profit:')} ${profitColor(profitValue)} ${logger.currency(breakdown.startingCurrency)} ${logger.dim(`(${breakdown.profitPercentage.toFixed(4)}%)`)}`
-        );
-      }
-      // Format total fees in the currency of the last step
-      if (lastStep) {
-        console.log(
-          `   ${logger.info('Total Fees Paid:')} ${logger.amount(formatCurrency(breakdown.totalFees, lastStep.outputCurrency, lastStep.pair, marketData))}`
-        );
-      }
-
-      // Show other opportunities briefly
-      if (validatedOpportunities.length > 1) {
-        console.log(`\n   ${logger.info('Other opportunities:')}`);
-        validatedOpportunities.slice(1).forEach((item, index) => {
-          const path = item.breakdown.path.join(' -> ');
-          const currency = item.breakdown.startingCurrency;
-          console.log(
-            `   ${index + 2}. ${logger.path(path)}: ${logger.profit(item.breakdown.profitPercentage, '%')} ${logger.dim(`(${logger.currency(currency)} required)`)}`
-          );
-        });
-      }
+      this.displayProfitableOpportunities(validatedOpportunities, marketData);
       return;
     }
 
     // No profitable opportunities found - check best opportunity with realistic prices
-    const bestOpportunity = findBestOpportunity(prices, FEE_TIER);
+    const bestOpportunity = findBestOpportunity(
+      prices,
+      ARBITRAGE_CONFIG.FEE_TIER
+    );
 
     if (!bestOpportunity) {
       console.log(
@@ -211,7 +207,7 @@ export class ArbitrageEngine {
     const breakdown = calculateArbitrageBreakdown(
       bestOpportunity.path,
       marketData,
-      FEE_TIER
+      ARBITRAGE_CONFIG.FEE_TIER
       // No starting amount - will use realistic max trade size based on liquidity
     );
 
@@ -219,118 +215,34 @@ export class ArbitrageEngine {
     const breakdownProfit =
       breakdown?.profitPercentage ?? bestOpportunity.profitPercentage;
     const currentProfit = breakdownProfit;
-    const targetProfit = MIN_PROFIT_PERCENTAGE;
+    const targetProfit = ARBITRAGE_CONFIG.MIN_PROFIT_PERCENTAGE;
     const gap = targetProfit - currentProfit;
     const gapPercentage = (gap / targetProfit) * 100;
 
     // Check if the best opportunity is actually profitable with realistic prices
     // (It might not have been in the initial filtered list due to mid-price vs bid/ask difference)
     // Check breakdown exists, profit percentage meets threshold (profit can be small but percentage is what matters)
-    if (breakdown && breakdown.profitPercentage >= MIN_PROFIT_PERCENTAGE) {
+    if (
+      breakdown &&
+      breakdown.profitPercentage >= ARBITRAGE_CONFIG.MIN_PROFIT_PERCENTAGE
+    ) {
       // Reset line count when showing profitable opportunity (different message type)
       this.lastLogLineCount = 0;
       // This is actually a profitable opportunity! Show it as such
       console.log(
         `\n${logger.timestamp(getTimestamp())} ${logger.success(`✅ Found profitable arbitrage opportunity:`)}`
       );
-      console.log(
-        `\n${logger.header('📊 Detailed Breakdown (Best Opportunity):')}`
-      );
-      console.log(
-        `   ${logger.info('Path:')} ${logger.path(breakdown.path.join(' -> '))}`
-      );
-      const firstPair = breakdown.path[0];
-      if (firstPair) {
-        console.log(
-          `   ${logger.info('Trade Size:')} ${logger.amount(formatCurrency(breakdown.startingAmount, breakdown.startingCurrency, firstPair, marketData))} ${logger.currency(breakdown.startingCurrency)} ${logger.dim('(based on available liquidity)')}`
-        );
-      }
-      console.log(`\n   ${logger.info('Step-by-step:')}`);
-      breakdown.steps.forEach((step) => {
-        const priceLabel = step.priceIsEstimate ? '~' : '';
-        console.log(`   ${logger.step(step.step)}. ${step.action}`);
-        console.log(
-          `      ${logger.info('Price:')} ${priceLabel}${logger.price(formatPrice(step.price, step.pair, marketData))}${step.priceIsEstimate ? logger.warning(' (estimated)') : ''} | ${logger.info('Fee:')} ${(step.feeRate * 100).toFixed(4)}% (${logger.amount(formatCurrency(step.feeAmount, step.outputCurrency, step.pair, marketData))})`
-        );
-        if (
-          step.minTradeableAmount !== undefined &&
-          step.minTradeableAmount > 0
-        ) {
-          console.log(
-            `      ${logger.info('Min tradeable:')} ${logger.amount(formatCurrency(step.minTradeableAmount, step.inputCurrency, step.pair, marketData))} ${logger.currency(step.inputCurrency)} ${logger.dim('(VALR requirement)')}`
-          );
-        }
-        if (
-          step.maxTradeableAmount !== undefined &&
-          step.maxTradeableAmount > 0
-        ) {
-          console.log(
-            `      ${logger.info('Max tradeable at this step:')} ~${logger.amount(formatCurrency(step.maxTradeableAmount, step.inputCurrency, step.pair, marketData))} ${logger.currency(step.inputCurrency)} ${logger.dim('(0.1% of 24h volume)')}`
-          );
-        }
-        console.log(
-          `      ${logger.info('Result:')} ${logger.amount(formatCurrency(step.outputAmount, step.outputCurrency, step.pair, marketData))} ${logger.currency(step.outputCurrency)}`
-        );
-      });
-      const lastStep = breakdown.steps[breakdown.steps.length - 1];
-      if (lastStep) {
-        console.log(
-          `\n   ${logger.info('Final:')} ${logger.amount(formatCurrency(breakdown.finalAmount, lastStep.outputCurrency, lastStep.pair, marketData))} ${logger.currency(lastStep.outputCurrency)}`
-        );
-      }
-      if (firstPair) {
-        const profitValue = formatCurrency(
-          breakdown.profit,
-          breakdown.startingCurrency,
-          firstPair,
-          marketData
-        );
-        const profitColor =
-          breakdown.profit >= 0 ? logger.success : logger.error;
-        console.log(
-          `   ${logger.info('Profit:')} ${profitColor(profitValue)} ${logger.currency(breakdown.startingCurrency)} ${logger.dim(`(${breakdown.profitPercentage.toFixed(4)}%)`)}`
-        );
-      }
-      if (lastStep) {
-        console.log(
-          `   ${logger.info('Total Fees Paid:')} ${logger.amount(formatCurrency(breakdown.totalFees, lastStep.outputCurrency, lastStep.pair, marketData))}`
-        );
-      }
+      displayBreakdown(breakdown, marketData);
       return;
     }
 
     // If breakdown is null but theoretical profit is above threshold, log a warning
-    if (!breakdown && currentProfit >= MIN_PROFIT_PERCENTAGE) {
-      // Reset line count when showing warning (different message type)
-      this.lastLogLineCount = 0;
-      console.log(
-        `\n${logger.timestamp(getTimestamp())} ${logger.warning('⚠️  Theoretical opportunity found but cannot validate with realistic prices:')}`
+    if (!breakdown && currentProfit >= ARBITRAGE_CONFIG.MIN_PROFIT_PERCENTAGE) {
+      this.displayTheoreticalOpportunityWarning(
+        bestOpportunity,
+        currentProfit,
+        missingPairs
       );
-      console.log(
-        `   ${logger.info('Path:')} ${logger.path(bestOpportunity.path.join(' -> '))}`
-      );
-      console.log(
-        `   ${logger.info('Theoretical profit:')} ${logger.success(`${currentProfit.toFixed(4)}%`)} ${logger.dim('(using mid-prices, may differ from realistic bid/ask)')}`
-      );
-      if (missingPairs.length > 0) {
-        console.log(
-          `   ${logger.warning('⚠️  Missing market data for:')} ${logger.error(missingPairs.join(', '))}`
-        );
-        console.log(
-          `   ${logger.dim('These pairs may not be subscribed or have not received price updates yet.')}`
-        );
-      } else {
-        console.log(
-          `   ${logger.warning('⚠️  Invalid arbitrage path - currency flow does not match pair sequence')}`
-        );
-        console.log(
-          `   ${logger.dim('The cycle detector found this using theoretical prices, but the path is not executable.')}`
-        );
-        console.log(
-          `   ${logger.dim('This may indicate an issue with the cycle detection algorithm.')}`
-        );
-      }
-      console.log('');
       return;
     }
 
@@ -338,7 +250,8 @@ export class ArbitrageEngine {
     const pathChanged = currentPath !== this.lastLoggedPath;
     const profitChanged =
       this.lastLoggedProfit === null ||
-      Math.abs(currentProfit - this.lastLoggedProfit) > 0.01; // 0.01% threshold
+      Math.abs(currentProfit - this.lastLoggedProfit) >
+        ARBITRAGE_CONFIG.PROFIT_CHANGE_THRESHOLD;
 
     const now = Date.now();
     const timeSinceLastLog = now - this.lastLogTime;
@@ -413,60 +326,22 @@ export class ArbitrageEngine {
     // Show example trade breakdown only when path changes
     if (breakdown) {
       const firstPair = breakdown.path[0];
-      const exampleTradeLine = `\n   ${logger.info('Example trade')} ${logger.dim('(realistic size:')} ${firstPair ? logger.amount(formatCurrency(breakdown.startingAmount, breakdown.startingCurrency, firstPair, marketData)) : breakdown.startingAmount.toString()} ${logger.currency(breakdown.startingCurrency)}${logger.dim('):')}`;
+      const exampleTradeLine = `\n   ${logger.info('Example trade')} ${logger.dim('(realistic size:')} ${firstPair ? formatCurrency(breakdown.startingAmount, breakdown.startingCurrency, firstPair, marketData) : breakdown.startingAmount.toString()} ${logger.currency(breakdown.startingCurrency)}${logger.dim('):')}`;
       console.log(exampleTradeLine);
       linesPrinted += exampleTradeLine.split('\n').length;
 
-      breakdown.steps.forEach((step) => {
-        const priceLabel = step.priceIsEstimate ? '~' : '';
-        const stepLine = `   ${logger.step(step.step)}. ${step.action} @ ${priceLabel}${logger.price(formatPrice(step.price, step.pair, marketData))}${step.priceIsEstimate ? logger.warning(' (estimated)') : ''}`;
-        console.log(stepLine);
-        linesPrinted += stepLine.split('\n').length;
+      // Use condensed display but count lines manually
+      const originalLog = console.log;
+      let lineCount = 0;
+      console.log = (msg: string) => {
+        lineCount += msg.split('\n').length;
+        originalLog(msg);
+      };
 
-        const feeLine = `      ${logger.info('Fee:')} ${(step.feeRate * 100).toFixed(4)}% → ${logger.amount(formatCurrency(step.outputAmount, step.outputCurrency, step.pair, marketData))} ${logger.currency(step.outputCurrency)}`;
-        console.log(feeLine);
-        linesPrinted += feeLine.split('\n').length;
+      displayCondensedBreakdown(breakdown, marketData);
+      linesPrinted += lineCount;
 
-        if (
-          step.minTradeableAmount !== undefined &&
-          step.minTradeableAmount > 0
-        ) {
-          const minLine = `      ${logger.info('Min tradeable:')} ${logger.amount(formatCurrency(step.minTradeableAmount, step.inputCurrency, step.pair, marketData))} ${logger.currency(step.inputCurrency)} ${logger.dim('(VALR requirement)')}`;
-          console.log(minLine);
-          linesPrinted += minLine.split('\n').length;
-        }
-        if (
-          step.maxTradeableAmount !== undefined &&
-          step.maxTradeableAmount > 0
-        ) {
-          const maxLine = `      ${logger.info('Max tradeable at this step:')} ~${logger.amount(formatCurrency(step.maxTradeableAmount, step.inputCurrency, step.pair, marketData))} ${logger.currency(step.inputCurrency)}`;
-          console.log(maxLine);
-          linesPrinted += maxLine.split('\n').length;
-        }
-      });
-      const lastStep = breakdown.steps[breakdown.steps.length - 1];
-      if (lastStep) {
-        const finalLine = `   ${logger.info('Final:')} ${logger.amount(formatCurrency(breakdown.finalAmount, lastStep.outputCurrency, lastStep.pair, marketData))} ${logger.currency(lastStep.outputCurrency)}`;
-        console.log(finalLine);
-        linesPrinted += finalLine.split('\n').length;
-      } else if (firstPair) {
-        const finalLine = `   ${logger.info('Final:')} ${logger.amount(formatCurrency(breakdown.finalAmount, breakdown.startingCurrency, firstPair, marketData))}`;
-        console.log(finalLine);
-        linesPrinted += finalLine.split('\n').length;
-      }
-      if (firstPair) {
-        const profitValue = formatCurrency(
-          breakdown.profit,
-          breakdown.startingCurrency,
-          firstPair,
-          marketData
-        );
-        const profitColor =
-          breakdown.profit >= 0 ? logger.success : logger.error;
-        const profitLine = `   ${logger.info('Profit:')} ${profitColor(profitValue)} ${logger.currency(breakdown.startingCurrency)} ${logger.dim(`(${breakdown.profitPercentage.toFixed(4)}%)`)}`;
-        console.log(profitLine);
-        linesPrinted += profitLine.split('\n').length;
-      }
+      console.log = originalLog;
     }
 
     const spreadColor = currentProfit >= 0 ? logger.success : logger.error;

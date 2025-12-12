@@ -1,5 +1,6 @@
 import { calculateFeeMultiplier } from './fees';
 import { Pair } from './types/valrEnums';
+import { parsePair } from './utils/pairParsing';
 
 type PriceMap = Record<Pair, number>;
 
@@ -17,23 +18,6 @@ interface TradingPair {
   to: string; // Quote currency (e.g., 'USDT')
   pair: Pair;
   price: number; // Price of 1 unit of 'from' in terms of 'to'
-}
-
-/**
- * Extracts base and quote currencies from a pair string
- * e.g., 'BTCUSDT' -> { base: 'BTC', quote: 'USDT' }
- */
-function parsePair(pair: Pair): { base: string; quote: string } | null {
-  const pairStr = pair.toString();
-  // Common quote currencies
-  const quotes = ['USDT', 'USDC', 'BTC', 'ETH', 'ZAR'];
-  for (const quote of quotes) {
-    if (pairStr.endsWith(quote)) {
-      const base = pairStr.slice(0, -quote.length);
-      return { base, quote };
-    }
-  }
-  return null;
 }
 
 /**

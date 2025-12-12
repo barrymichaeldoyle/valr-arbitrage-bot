@@ -1,7 +1,9 @@
+import { ARBITRAGE_CONFIG } from './constants';
 import { getFeeRate, OrderType } from './fees';
 import { formatCurrency } from './formatting';
 import type { MarketDataMap } from './marketData';
 import { Pair } from './types/valrEnums';
+import { parsePair } from './utils/pairParsing';
 
 export interface TradeStep {
   step: number;
@@ -30,21 +32,6 @@ export interface ArbitrageBreakdown {
   totalFees: number;
   maxRealisticTradeSize: number | undefined; // Maximum realistic trade size based on liquidity
   realisticProfit: number | undefined; // Profit at max realistic trade size
-}
-
-/**
- * Parses a pair to extract base and quote currencies
- */
-function parsePair(pair: Pair): { base: string; quote: string } | null {
-  const pairStr = pair.toString();
-  const quotes = ['USDT', 'USDC', 'BTC', 'ETH', 'ZAR', 'USD', 'EUR'];
-  for (const quote of quotes) {
-    if (pairStr.endsWith(quote)) {
-      const base = pairStr.slice(0, -quote.length);
-      return { base, quote };
-    }
-  }
-  return null;
 }
 
 /**
@@ -85,7 +72,9 @@ function getPairPrice(
     // Convert quote volume to base currency: quoteVolume / bidPrice
     maxTradeableAmount =
       data.quoteVolume24h > 0 && price > 0
-        ? (data.quoteVolume24h * 0.001) / price // 0.1% of quote volume in base currency
+        ? (data.quoteVolume24h *
+            ARBITRAGE_CONFIG.MAX_TRADEABLE_VOLUME_PERCENTAGE) /
+          price
         : undefined;
     // Minimum trade size is in base currency
     minTradeableAmount =
@@ -97,7 +86,9 @@ function getPairPrice(
     isEstimate = data.askPrice <= 0;
     // When buying base, max tradeable is based on base volume (how much base currency sellers have)
     maxTradeableAmount =
-      data.baseVolume24h > 0 ? data.baseVolume24h * 0.001 : undefined; // 0.1% of base volume
+      data.baseVolume24h > 0
+        ? data.baseVolume24h * ARBITRAGE_CONFIG.MAX_TRADEABLE_VOLUME_PERCENTAGE
+        : undefined;
     // Minimum trade size: when buying base, we need at least minBaseAmount of base currency
     // But we're spending quote currency, so convert: minBaseAmount * askPrice
     minTradeableAmount =
@@ -335,7 +326,7 @@ export function calculateArbitrageBreakdown(
     const maxRealistic = calculateMaxRealisticTradeSize(path, marketData);
     if (maxRealistic === null || maxRealistic <= 0) {
       // Fallback to a small amount if we can't determine realistic size
-      actualStartingAmount = 0.001;
+      actualStartingAmount = ARBITRAGE_CONFIG.FALLBACK_STARTING_AMOUNT;
     } else {
       actualStartingAmount = maxRealistic;
     }

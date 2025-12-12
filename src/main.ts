@@ -1,4 +1,5 @@
 import { ArbitrageEngine } from './arb';
+import { ARBITRAGE_CONFIG } from './constants';
 import { setupKeyboardHandler } from './keyboardHandler';
 import { displayMarketSummary } from './marketSummary';
 import { displayPairConfig } from './pairConfig';
@@ -91,7 +92,7 @@ async function startBot() {
   // Poll every 2 seconds to check prices
   setInterval(() => {
     arbEngine.checkCycle();
-  }, 2000);
+  }, ARBITRAGE_CONFIG.CHECK_INTERVAL_MS);
 }
 
 startBot().catch((error) => {

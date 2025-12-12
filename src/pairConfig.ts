@@ -2,29 +2,8 @@ import { formatCurrency } from './formatting';
 import { logger } from './logger';
 import type { MarketDataMap } from './marketData';
 import { Pair } from './types/valrEnums';
-
-/**
- * Formats a timestamp for logging
- */
-function getTimestamp(): string {
-  const now = new Date();
-  return now.toISOString().replace('T', ' ').substring(0, 19);
-}
-
-/**
- * Parses a pair to extract base and quote currencies
- */
-function parsePair(pair: Pair): { base: string; quote: string } | null {
-  const pairStr = pair.toString();
-  const quotes = ['USDT', 'USDC', 'BTC', 'ETH', 'ZAR', 'USD', 'EUR'];
-  for (const quote of quotes) {
-    if (pairStr.endsWith(quote)) {
-      const base = pairStr.slice(0, -quote.length);
-      return { base, quote };
-    }
-  }
-  return null;
-}
+import { parsePair } from './utils/pairParsing';
+import { getTimestamp } from './utils/timestamp';
 
 /**
  * Displays pair configuration information including decimal places, min/max trade amounts

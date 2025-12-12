@@ -6,24 +6,16 @@ import {
   type ArbitrageOpportunity,
   findArbitrageOpportunities,
 } from './arbCycleDetector';
-import { DEFAULT_FEE_TIER } from './fees';
+import { ARBITRAGE_CONFIG } from './constants';
 import { formatCurrency } from './formatting';
 import { logger } from './logger';
 import type { MarketDataMap } from './marketData';
 import { Pair } from './types/valrEnums';
-
-const FEE_TIER = DEFAULT_FEE_TIER;
-const MIN_PROFIT_PERCENTAGE = -Infinity; // Show all opportunities, even unprofitable ones
+import { getTimestamp } from './utils/timestamp';
 
 type PriceMap = Record<Pair, number>;
 
-/**
- * Formats a timestamp for logging
- */
-function getTimestamp(): string {
-  const now = new Date();
-  return now.toISOString().replace('T', ' ').substring(0, 19);
-}
+const MIN_PROFIT_PERCENTAGE = -Infinity; // Show all opportunities, even unprofitable ones
 
 /**
  * Displays the top 10 arbitrage opportunities
@@ -54,7 +46,7 @@ export function displayTopOpportunities(
   // Find all opportunities (including unprofitable ones for comparison)
   const opportunities = findArbitrageOpportunities(
     fullPrices,
-    FEE_TIER,
+    ARBITRAGE_CONFIG.FEE_TIER,
     MIN_PROFIT_PERCENTAGE
   );
 
@@ -74,7 +66,7 @@ export function displayTopOpportunities(
     const breakdown = calculateArbitrageBreakdown(
       opp.path,
       marketData,
-      FEE_TIER
+      ARBITRAGE_CONFIG.FEE_TIER
     );
     opportunitiesWithBreakdowns.push({ opportunity: opp, breakdown });
   }
