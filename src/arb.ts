@@ -8,7 +8,6 @@ import {
   findBestOpportunity,
 } from './arbCycleDetector';
 import { ARBITRAGE_CONFIG } from './constants';
-import { formatCurrency } from './formatting';
 import { logger } from './logger';
 import type { MarketDataMap } from './marketData';
 import { Pair } from './types/valrEnums';
@@ -325,11 +324,6 @@ export class ArbitrageEngine {
 
     // Show example trade breakdown only when path changes
     if (breakdown) {
-      const firstPair = breakdown.path[0];
-      const exampleTradeLine = `\n   ${logger.info('Example trade')} ${logger.dim('(realistic size:')} ${firstPair ? formatCurrency(breakdown.startingAmount, breakdown.startingCurrency, firstPair, marketData) : breakdown.startingAmount.toString()} ${logger.currency(breakdown.startingCurrency)}${logger.dim('):')}`;
-      console.log(exampleTradeLine);
-      linesPrinted += exampleTradeLine.split('\n').length;
-
       // Use condensed display but count lines manually
       const originalLog = console.log;
       let lineCount = 0;
