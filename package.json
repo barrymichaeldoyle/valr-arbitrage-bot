@@ -12,7 +12,11 @@
     "lint:fix": "eslint src/**/*.ts --fix"
   },
   "keywords": [],
-  "author": "",
+  "author": {
+    "name": "Barry Michaely Doyle",
+    "email": "barry@barrymichaeldoyle.com",
+    "url": "https://github.com/barrymichaeldoyle"
+  },
   "license": "ISC",
   "type": "module",
   "dependencies": {
