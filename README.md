@@ -21,7 +21,7 @@ A real-time cryptocurrency arbitrage opportunity detector for the VALR exchange.
 1. Clone the repository:
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/barrymichaeldoyle/valr-arbitrage-bot.git
 cd valr-trader-bot
 ```
 
