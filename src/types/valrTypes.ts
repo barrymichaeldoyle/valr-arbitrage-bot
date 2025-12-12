@@ -1,4 +1,9 @@
-import type { AccountSubscriptionEvent, Pair, SubscriptionType, TradeSubscriptionEvent } from './valrEnums';
+import type {
+  AccountSubscriptionEvent,
+  Pair,
+  SubscriptionType,
+  TradeSubscriptionEvent,
+} from './valrEnums';
 
 export interface Subscription {
   event: TradeSubscriptionEvent | AccountSubscriptionEvent;
@@ -31,8 +36,8 @@ export interface MarketSummaryUpdate {
 
 export interface ErrorMessage {
   type: 'ERROR';
-  payload: string;
+  message?: string;
+  payload?: string;
 }
 
 export type ValrWebSocketMessage = MarketSummaryUpdate | ErrorMessage;
-

@@ -29,5 +29,9 @@
     "typescript",
     "typescriptreact"
   ],
-  "eslint.format.enable": true
+  "eslint.format.enable": true,
+
+  // CodeLens
+  "typescript.referencesCodeLens.enabled": true,
+  "typescript.referencesCodeLens.showOnAllFunctions": true
 }
